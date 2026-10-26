@@ -22,3 +22,14 @@
 @media print{#splitter,.layout-hint,.zoom-control{display:none}.columns{grid-template-columns:1fr 1fr}.positioned-block{overflow:visible;height:auto!important}}
 
 .pdf-marker{position:absolute;pointer-events:none;border:1px solid transparent}.pdf-marker.active{background:#ba98dd22;border-color:#9474a8}
+
+/* Focus reading keeps page navigation, progress, pause and an exit button accessible. */
+#focusToggle{border-color:#9a7bae;background:#fdf8ff}#focusToggle[aria-pressed=true]{background:#71548c;color:white}
+#focusStop{color:#a34632}.focus-reading>.toolbar,.focus-reading>.docbar,.focus-reading>#layoutHint{display:none}
+.focus-reading>.statusbar{margin:6px 8px 0;padding:4px 10px;gap:6px;flex-wrap:nowrap;min-height:34px}
+.focus-reading>.statusbar #status{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.focus-reading>.statusbar>.actions{flex-wrap:nowrap;gap:6px}.focus-reading>.statusbar label,.focus-reading #resetView{display:none}
+.focus-reading>.columns{padding:7px 8px 8px}.focus-reading .pane{border-radius:12px}.focus-reading .panehead{padding:5px 12px}.focus-reading #targetLabel{display:none}
+.focus-reading .scroll{padding:12px 18px}.focus-reading>.reader-notice{margin:5px 8px 0;padding:3px 10px}
+@media(max-width:600px){.focus-reading>.statusbar #status{max-width:23vw}.focus-reading>.statusbar{font-size:11px;padding:4px 6px}.focus-reading>.statusbar button{padding:2px 6px}.focus-reading .scroll{padding:9px}}
+@media print{#focusToggle,#focusStop{display:none}}

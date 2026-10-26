@@ -11,12 +11,15 @@ const source=$('source'),target=$('target');
 const status=t=>$('status').textContent=t;
 const selection=initSelection({source,target,configure:async()=>{await loadSettings();return{settings:{...settings},profile};}});
 let pdfRenderTask=null,pdfTextTask=null;
-let view={ratio:50,sourceZoom:100,targetZoom:100,mode:'match',font:18};
-try{const saved=JSON.parse(localStorage.getItem('paper-twin-view'+(detached?'-detached':''))||'{}');for(const k of ['ratio','sourceZoom','targetZoom','font'])if(Number.isFinite(saved[k]))view[k]=saved[k];if(['match','flow'].includes(saved.mode))view.mode=saved.mode;}catch{}
+let view={ratio:50,sourceZoom:100,targetZoom:100,mode:'match',font:18,focus:false};
+try{const saved=JSON.parse(localStorage.getItem('paper-twin-view'+(detached?'-detached':''))||'{}');for(const k of ['ratio','sourceZoom','targetZoom','font'])if(Number.isFinite(saved[k]))view[k]=saved[k];if(['match','flow'].includes(saved.mode))view.mode=saved.mode;if(typeof saved.focus==='boolean')view.focus=saved.focus;}catch{}
 view.ratio=Math.max(20,Math.min(80,view.ratio));for(const k of ['sourceZoom','targetZoom'])view[k]=Math.max(50,Math.min(250,view[k]));
 function saveView(){localStorage.setItem('paper-twin-view'+(detached?'-detached':''),JSON.stringify(view));}
-function applyView(){const columns=document.querySelector('.columns');columns.style.setProperty('--source-fr',view.ratio+'fr');columns.style.setProperty('--target-fr',(100-view.ratio)+'fr');$('splitter').setAttribute('aria-valuenow',String(Math.round(view.ratio)));$('sourceZoom').value=view.sourceZoom;$('targetZoom').value=view.targetZoom;$('layoutMode').value=view.mode;$('font').value=view.font;document.documentElement.style.setProperty('--text-size',view.font+'px');source.style.setProperty('--pane-zoom',view.sourceZoom/100);target.style.setProperty('--pane-zoom',view.targetZoom/100);}
+function applyView(){document.body.classList.toggle('focus-reading',view.focus);$('focusToggle').textContent=view.focus?'显示工具栏':'专注阅读';$('focusToggle').setAttribute('aria-pressed',String(view.focus));$('focusToggle').title=view.focus?'显示标题、设置和工具栏（F8 或 Esc）':'隐藏标题和工具栏（F8）';$('focusStop').hidden=!view.focus||!busy;const columns=document.querySelector('.columns');columns.style.setProperty('--source-fr',view.ratio+'fr');columns.style.setProperty('--target-fr',(100-view.ratio)+'fr');$('splitter').setAttribute('aria-valuenow',String(Math.round(view.ratio)));$('sourceZoom').value=view.sourceZoom;$('targetZoom').value=view.targetZoom;$('layoutMode').value=view.mode;$('font').value=view.font;document.documentElement.style.setProperty('--text-size',view.font+'px');source.style.setProperty('--pane-zoom',view.sourceZoom/100);target.style.setProperty('--pane-zoom',view.targetZoom/100);}
 applyView();
+function toggleFocus(value=!view.focus){view.focus=value;applyView();saveView();}
+$('focusToggle').onclick=()=>toggleFocus();$('focusStop').onclick=()=>cancel();
+document.addEventListener('keydown',e=>{if(e.defaultPrevented||e.ctrlKey||e.altKey||e.metaKey||document.querySelector('dialog[open]')||e.target.closest('input,textarea,select,[contenteditable]'))return;if(e.key==='F8'){e.preventDefault();toggleFocus();}else if(e.key==='Escape'&&view.focus){e.preventDefault();toggleFocus(false);}});
 const available=el=>{const css=getComputedStyle(el);return Math.max(1,el.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight));};
 function alignText(){if(pdf||detached||view.mode!=='match')return;const a=[...source.querySelectorAll('.block')],b=[...target.querySelectorAll('.block')];for(const el of [...a,...b])el.style.minHeight='';a.forEach((el,i)=>{if(b[i]){const h=Math.max(el.getBoundingClientRect().height,b[i].getBoundingClientRect().height);el.style.minHeight=h+'px';b[i].style.minHeight=h+'px';}});}
 function applyBlockStyle(el,i){if(pdf)return;const st=textStyle(doc.pages[page].chunks[i]);el.style.fontSize=`calc(var(--text-size) * var(--pane-zoom) * ${st.size})`;el.style.fontWeight=st.weight;}
@@ -28,11 +31,11 @@ splitter.onpointerup=e=>{if(splitter.hasPointerCapture(e.pointerId))splitter.rel
 splitter.ondblclick=()=>ratio(50);splitter.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home'].includes(e.key))return;e.preventDefault();ratio(e.key==='Home'?50:view.ratio+(e.key==='ArrowLeft'?-2:2));};
 for(const k of ['sourceZoom','targetZoom'])$(k).onchange=()=>{view[k]=Math.max(50,Math.min(250,Number($(k).value)||100));applyView();saveView();redraw().catch(e=>status(e.message));};
 $('layoutMode').onchange=()=>{view.mode=$('layoutMode').value;applyView();saveView();redraw().catch(e=>status(e.message));};
-$('resetView').onclick=()=>{view={ratio:50,sourceZoom:100,targetZoom:100,mode:'match',font:18};applyView();saveView();redraw().catch(e=>status(e.message));};
+$('resetView').onclick=()=>{view={ratio:50,sourceZoom:100,targetZoom:100,mode:'match',font:18,focus:false};applyView();saveView();redraw().catch(e=>status(e.message));};
 
 async function loadSettings(){settings={...DEFAULTS,...(await chrome.storage.local.get('settings')).settings};profile=await hash(JSON.stringify([settings.endpoint,settings.model,settings.language,settings.domain,settings.glossary,settings.sourceLanguage,settings.pahlaviFormat,'philology-v1']));$('targetLabel').textContent=settings.language+' · '+(isPahlavi(settings)?'帕拉维语辅助释读（需校订）':settings.domain);$('languageNotice').hidden=!isPahlavi(settings);target.dir=settings.language==='波斯语（Persian）'?'rtl':'auto';}
 const cacheKey=(p,i)=>`tr:${doc.id}:${profile}:${p}:${i}`;
-function controls(){const locked=busy||importing;$('all').disabled=locked||!doc;$('current').disabled=locked||!doc;$('stop').disabled=!busy;$('prev').disabled=importing||!doc||page===0;$('next').disabled=importing||!doc||page>=doc.pages.length-1;$('file').disabled=locked;$('paste').disabled=locked;$('library').disabled=locked;}
+function controls(){const locked=busy||importing;$('all').disabled=locked||!doc;$('current').disabled=locked||!doc;$('stop').disabled=!busy;$('focusStop').disabled=!busy;$('focusStop').hidden=!view.focus||!busy;$('prev').disabled=importing||!doc||page===0;$('next').disabled=importing||!doc||page>=doc.pages.length-1;$('file').disabled=locked;$('paste').disabled=locked;$('library').disabled=locked;}
 function cancel(){abort?.abort();}
 async function openDoc(id){
  cancel();renderVersion++;
