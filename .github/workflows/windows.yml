@@ -1,0 +1,56 @@
+name: Build Windows desktop
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.4'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Run tests
+        run: bun run test
+      - name: Build Windows executable
+        run: bun run build:windows
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          Copy-Item '使用说明.txt' 'dist/使用说明.txt'
+          Copy-Item 'LICENSE' 'dist/LICENSE'
+          Copy-Item 'BUN-LICENSE.md' 'dist/BUN-LICENSE.md'
+          Compress-Archive -Path 'dist/PaperTwin.exe','dist/使用说明.txt','dist/LICENSE','dist/BUN-LICENSE.md' -DestinationPath 'dist/PaperTwin-Windows-x64.zip'
+          (Get-FileHash 'dist/PaperTwin.exe' -Algorithm SHA256).Hash | Out-File 'dist/SHA256.txt' -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PaperTwin-Windows-x64
+          path: |
+            dist/PaperTwin.exe
+            dist/PaperTwin-Windows-x64.zip
+            dist/SHA256.txt
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content 'package.json' -Raw | ConvertFrom-Json).version
+          $tag = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { "v$version" }
+          gh release view $tag --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -ne 0) {
+            '卡通风格文献双屏译读。解压 ZIP 后运行 PaperTwin.exe。帕拉维语为试验性辅助释读，准确性需人工校订。' | Out-File 'release-notes.txt' -Encoding utf8
+            gh release create $tag --repo '${{ github.repository }}' --target '${{ github.sha }}' --title "Paper Twin $version" --notes-file 'release-notes.txt'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $tag 'dist/PaperTwin.exe' 'dist/PaperTwin-Windows-x64.zip' 'dist/SHA256.txt' --repo '${{ github.repository }}' --clobber
+          exit $LASTEXITCODE

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+ui/vendor/
+assets.ts
+.env
+.env.*
+*.log
+BrowserData/
+.DS_Store

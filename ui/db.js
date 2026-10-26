@@ -1,0 +1,4 @@
+const ready=new Promise((resolve,reject)=>{const r=indexedDB.open('paper-twin',1);r.onupgradeneeded=()=>r.result.createObjectStore('items');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+export async function get(key){const db=await ready;return new Promise((res,rej)=>{const r=db.transaction('items').objectStore('items').get(key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+export async function put(key,value){const db=await ready;return new Promise((res,rej)=>{const tx=db.transaction('items','readwrite');tx.objectStore('items').put(value,key);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}
+export async function clear(){const db=await ready;return new Promise((res,rej)=>{const tx=db.transaction('items','readwrite');tx.objectStore('items').clear();tx.oncomplete=res;tx.onerror=()=>rej(tx.error);});}

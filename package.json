@@ -1,0 +1,17 @@
+{
+  "name": "paper-twin-translator",
+  "version": "1.2.1",
+  "private": true,
+  "type": "module",
+  "description": "文献双屏译读桌面程序",
+  "license": "MIT",
+  "scripts": {
+    "start": "bun run prepare:assets && bun server.ts",
+    "prepare:assets": "bun scripts/prepare-assets.ts",
+    "test": "node --test ui/tests/core.test.mjs",
+    "build:windows": "bun run prepare:assets && bun build --compile --target=bun-windows-x64-baseline --windows-hide-console --no-compile-autoload-dotenv --no-compile-autoload-bunfig server.ts --outfile dist/PaperTwin.exe"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "5.6.205"
+  }
+}
