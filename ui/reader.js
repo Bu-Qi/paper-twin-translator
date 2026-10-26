@@ -2,6 +2,7 @@ import*as pdfjs from'./vendor/pdf.mjs';
 import{DEFAULTS,splitText,translate,hash,isPahlavi}from'./core.js';
 import*as db from'./db.js';
 import{initSelection}from'./selection.js';
+import{pdfLayout,textStyle}from'./layout.js';
 pdfjs.GlobalWorkerOptions.workerSrc='./vendor/pdf.worker.mjs';
 const $=id=>document.getElementById(id),params=new URLSearchParams(location.search),detached=params.get('view')==='translation';
 if(detached)document.body.classList.add('detached');
@@ -10,6 +11,25 @@ const source=$('source'),target=$('target');
 const status=t=>$('status').textContent=t;
 const selection=initSelection({source,target,configure:async()=>{await loadSettings();return{settings:{...settings},profile};}});
 let pdfRenderTask=null,pdfTextTask=null;
+let view={ratio:50,sourceZoom:100,targetZoom:100,mode:'match',font:18};
+try{const saved=JSON.parse(localStorage.getItem('paper-twin-view'+(detached?'-detached':''))||'{}');for(const k of ['ratio','sourceZoom','targetZoom','font'])if(Number.isFinite(saved[k]))view[k]=saved[k];if(['match','flow'].includes(saved.mode))view.mode=saved.mode;}catch{}
+view.ratio=Math.max(20,Math.min(80,view.ratio));for(const k of ['sourceZoom','targetZoom'])view[k]=Math.max(50,Math.min(250,view[k]));
+function saveView(){localStorage.setItem('paper-twin-view'+(detached?'-detached':''),JSON.stringify(view));}
+function applyView(){const columns=document.querySelector('.columns');columns.style.setProperty('--source-fr',view.ratio+'fr');columns.style.setProperty('--target-fr',(100-view.ratio)+'fr');$('splitter').setAttribute('aria-valuenow',String(Math.round(view.ratio)));$('sourceZoom').value=view.sourceZoom;$('targetZoom').value=view.targetZoom;$('layoutMode').value=view.mode;$('font').value=view.font;document.documentElement.style.setProperty('--text-size',view.font+'px');source.style.setProperty('--pane-zoom',view.sourceZoom/100);target.style.setProperty('--pane-zoom',view.targetZoom/100);}
+applyView();
+const available=el=>{const css=getComputedStyle(el);return Math.max(1,el.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight));};
+function alignText(){if(pdf||detached||view.mode!=='match')return;const a=[...source.querySelectorAll('.block')],b=[...target.querySelectorAll('.block')];for(const el of [...a,...b])el.style.minHeight='';a.forEach((el,i)=>{if(b[i]){const h=Math.max(el.getBoundingClientRect().height,b[i].getBoundingClientRect().height);el.style.minHeight=h+'px';b[i].style.minHeight=h+'px';}});}
+function applyBlockStyle(el,i){if(pdf)return;const st=textStyle(doc.pages[page].chunks[i]);el.style.fontSize=`calc(var(--text-size) * var(--pane-zoom) * ${st.size})`;el.style.fontWeight=st.weight;}
+async function redraw(){if(!doc)return;const a=source.scrollTop/Math.max(1,source.scrollHeight-source.clientHeight),b=target.scrollTop/Math.max(1,target.scrollHeight-target.clientHeight);await render();setScroll(source,a);setScroll(target,b);}
+const splitter=$('splitter');function ratio(n){view.ratio=Math.max(20,Math.min(80,n));applyView();saveView();}
+splitter.onpointerdown=e=>{if(e.button!==0)return;e.preventDefault();splitter.setPointerCapture(e.pointerId);document.body.classList.add('resizing');};
+splitter.onpointermove=e=>{if(!splitter.hasPointerCapture(e.pointerId))return;const c=document.querySelector('.columns'),r=c.getBoundingClientRect(),css=getComputedStyle(c),left=parseFloat(css.paddingLeft),right=parseFloat(css.paddingRight);ratio(100*(e.clientX-r.left-left)/(r.width-left-right));};
+splitter.onpointerup=e=>{if(splitter.hasPointerCapture(e.pointerId))splitter.releasePointerCapture(e.pointerId);document.body.classList.remove('resizing');};splitter.onlostpointercapture=()=>document.body.classList.remove('resizing');
+splitter.ondblclick=()=>ratio(50);splitter.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home'].includes(e.key))return;e.preventDefault();ratio(e.key==='Home'?50:view.ratio+(e.key==='ArrowLeft'?-2:2));};
+for(const k of ['sourceZoom','targetZoom'])$(k).onchange=()=>{view[k]=Math.max(50,Math.min(250,Number($(k).value)||100));applyView();saveView();redraw().catch(e=>status(e.message));};
+$('layoutMode').onchange=()=>{view.mode=$('layoutMode').value;applyView();saveView();redraw().catch(e=>status(e.message));};
+$('resetView').onclick=()=>{view={ratio:50,sourceZoom:100,targetZoom:100,mode:'match',font:18};applyView();saveView();redraw().catch(e=>status(e.message));};
+
 async function loadSettings(){settings={...DEFAULTS,...(await chrome.storage.local.get('settings')).settings};profile=await hash(JSON.stringify([settings.endpoint,settings.model,settings.language,settings.domain,settings.glossary,settings.sourceLanguage,settings.pahlaviFormat,'philology-v1']));$('targetLabel').textContent=settings.language+' · '+(isPahlavi(settings)?'帕拉维语辅助释读（需校订）':settings.domain);$('languageNotice').hidden=!isPahlavi(settings);target.dir=settings.language==='波斯语（Persian）'?'rtl':'auto';}
 const cacheKey=(p,i)=>`tr:${doc.id}:${profile}:${p}:${i}`;
 function controls(){const locked=busy||importing;$('all').disabled=locked||!doc;$('current').disabled=locked||!doc;$('stop').disabled=!busy;$('prev').disabled=importing||!doc||page===0;$('next').disabled=importing||!doc||page>=doc.pages.length-1;$('file').disabled=locked;$('paste').disabled=locked;$('library').disabled=locked;}
@@ -70,7 +90,7 @@ async function render(){
  if(pdf&&!detached){
   const pg=await pdf.getPage(page+1);if(v!==renderVersion)return;
   const base=pg.getViewport({scale:1}),css=getComputedStyle(source),width=source.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight);
-  const viewport=pg.getViewport({scale:Math.max(0.2,width/base.width)}),dpr=window.devicePixelRatio||1;
+  const viewport=pg.getViewport({scale:Math.max(0.1,width/base.width*view.sourceZoom/100)}),dpr=window.devicePixelRatio||1;
   const shell=document.createElement('div');shell.className='pdf-page-shell';shell.style.width=viewport.width+'px';shell.style.height=viewport.height+'px';shell.style.setProperty('--total-scale-factor',viewport.scale);source.append(shell);
   const canvas=document.createElement('canvas');canvas.className='pagecanvas';canvas.width=Math.ceil(viewport.width*dpr);canvas.height=Math.ceil(viewport.height*dpr);shell.append(canvas);
   const layer=document.createElement('div');layer.className='textLayer';shell.append(layer);
@@ -78,22 +98,33 @@ async function render(){
   pdfTextTask=new pdfjs.TextLayer({textContentSource:pg.streamTextContent(),container:layer,viewport});
   try{await Promise.all([pdfRenderTask.promise,pdfTextTask.render()]);}catch(e){if(e.name==='RenderingCancelledException'||e.name==='AbortException')return;throw e;}if(v!==renderVersion)return;
 
- }else if(!detached){doc.pages[page].chunks.forEach((text,i)=>{const p=document.createElement('p');p.className='block';p.dir='auto';p.dataset.index=i;p.textContent=text;source.append(p);});}
+ }else if(!detached){doc.pages[page].chunks.forEach((text,i)=>{const p=document.createElement('p');p.className='block';p.dir='auto';p.dataset.index=i;p.textContent=text;applyBlockStyle(p,i);source.append(p);});}
+ if(pdf&&!doc.pages[page].layout){const pg=await pdf.getPage(page+1);const content=await pg.getTextContent();await pg.getOperatorList();if(v!==renderVersion)return;for(const [name,style]of Object.entries(content.styles)){try{const font=pg.commonObjs.get(name);if(font?.name)style.fontFamily+=' '+font.name;}catch{}}doc.pages[page].layout=pdfLayout(content,pg.getViewport({scale:1}),doc.pages[page].chunks);}
+ if(pdf&&!detached&&doc.pages[page].layout){const layout=doc.pages[page].layout,shell=source.querySelector('.pdf-page-shell'),scale=parseFloat(shell.style.width)/layout.width;layout.blocks.forEach((b,i)=>{if(!b)return;const marker=document.createElement('div');marker.className='pdf-marker';marker.dataset.index=i;Object.assign(marker.style,{left:b.x*scale+'px',top:b.y*scale+'px',width:b.width*scale+'px',height:b.height*scale+'px'});shell.append(marker);});}
  await renderTranslations();source.scrollTop=0;target.scrollTop=0;
 }
 async function renderTranslations(){
  if(!doc)return;const id=doc.id,p=page,ver=renderVersion,frag=document.createDocumentFragment();
- const chunks=doc.pages[p].chunks;
+ const chunks=doc.pages[p].chunks,layout=doc.pages[p].layout,matching=pdf&&view.mode==='match'&&layout;
+ $('layoutHint').hidden=!matching;
+ let container=frag,scale=1;
+ if(matching){scale=available(target)/layout.width*view.targetZoom/100;const sheet=document.createElement('div');sheet.className='translation-sheet';sheet.style.width=layout.width*scale+'px';sheet.style.height=layout.height*scale+'px';frag.append(sheet);container=sheet;}
+
  if(!chunks.length){const el=document.createElement('p');el.className='pending';el.textContent='本页未识别到文字（图片、空白页或扫描件），需要先 OCR。';frag.append(el);}
  for(let i=0;i<chunks.length;i++){
-  const saved=await db.get(cacheKey(p,i));const el=document.createElement('div');el.className='block';el.dir='auto';el.dataset.index=i;
+  const saved=await db.get(cacheKey(p,i));const el=document.createElement('div');el.className='block';el.dir='auto';el.dataset.index=i;applyBlockStyle(el,i);
+  if(matching&&layout.blocks[i]){const b=layout.blocks[i];el.classList.add('positioned-block');Object.assign(el.style,{left:b.x*scale+'px',top:b.y*scale+'px',width:Math.max(1,b.width*scale)+'px',height:Math.max(1,b.height*scale)+'px',fontSize:b.size*scale*view.font/18+'px',fontWeight:b.weight,fontStyle:b.italic?'italic':'normal',fontFamily:b.serif?'Georgia, SimSun, serif':'system-ui, sans-serif'});el.tabIndex=0;el.title='原文段落 '+(i+1)+' · 译文较长时在此框内滚动，或切换舒适阅读';}
+  else if(matching){el.classList.add('unmapped-block');}
+  else if(pdf)el.style.fontSize='calc(var(--text-size) * var(--pane-zoom))';
   if(saved?.text){el.textContent=saved.text;}else{
    el.classList.add('pending');const text=document.createElement('div');text.textContent=`段落 ${i+1} · 待翻译\n${chunks[i].slice(0,100)}…`;el.append(text);
    if(!detached){const b=document.createElement('button');b.className='retry';b.textContent='翻译此段';b.disabled=busy;b.onclick=()=>run([{p,i}]);el.append(b);}
   }
-  el.onmouseenter=()=>{source.querySelectorAll('.active').forEach(x=>x.classList.remove('active'));source.querySelector(`[data-index="${i}"]`)?.classList.add('active');};frag.append(el);
+  el.onmouseenter=()=>{source.querySelectorAll('.active').forEach(x=>x.classList.remove('active'));source.querySelector(`[data-index="${i}"]`)?.classList.add('active');};
+  // Unmatched text remains visible after the page instead of being lost.
+  if(el.classList.contains('unmapped-block'))frag.append(el);else container.append(el);
  }
- if(doc.id===id&&page===p&&ver===renderVersion){const old=target.scrollTop;target.replaceChildren(frag);target.scrollTop=old;}
+ if(doc.id===id&&page===p&&ver===renderVersion){const old=target.scrollTop;target.replaceChildren(frag);target.scrollTop=old;alignText();}
 }
 async function go(n,broadcast=true){if(!doc||n<0||n>=doc.pages.length)return;page=n;await render();if(broadcast)channel?.postMessage({type:'page',page});}
 $('prev').onclick=()=>go(page-1);$('next').onclick=()=>go(page+1);
@@ -118,7 +149,7 @@ async function run(jobs){
 const jobsFor=pages=>pages.flatMap(p=>doc.pages[p].chunks.map((_,i)=>({p,i})));
 $('current').onclick=()=>run(jobsFor([page]));$('all').onclick=()=>run(jobsFor(doc.pages.map((_,p)=>p)));$('stop').onclick=cancel;
 $('settings').onclick=$('setup').onclick=()=>chrome.runtime.openOptionsPage();
-$('font').onchange=()=>document.documentElement.style.setProperty('--text-size',$('font').value+'px');
+$('font').onchange=()=>{view.font=Number($('font').value);applyView();saveView();redraw().catch(e=>status(e.message));};
 $('paste').onclick=()=>$('pasteDialog').showModal();$('pasteCancel').onclick=()=>$('pasteDialog').close();
 $('pasteOK').onclick=async()=>{try{await importText($('pasteTitle').value,$('pasteText').value);$('pasteDialog').close();}catch(e){status(e.message);}};
 $('demo').onclick=()=>importText('示例 · 化学文献实验部分','General procedure for the synthesis of compound 5\n\nTo a solution of compound 4 (1.0 mmol) in ethanol (10 mL) was added potassium carbonate (2.0 mmol). The mixture was stirred at room temperature for 2 h.\n\nThe reaction mixture was filtered and concentrated under reduced pressure. The residue was purified by column chromatography to afford compound 5 as a white solid (85% yield).\n\nThis is a demonstration passage, not a validated experimental procedure.');
@@ -146,4 +177,6 @@ try{
  else if(params.has('doc'))await openDoc(params.get('doc'));
 }catch(e){status(e.message);}
 
-let resizeTimer;let oldWidth=source.clientWidth;new ResizeObserver(()=>{const width=source.clientWidth;if(Math.abs(width-oldWidth)<2)return;oldWidth=width;clearTimeout(resizeTimer);if(pdf&&!detached)resizeTimer=setTimeout(()=>render().catch(e=>status('页面重绘失败：'+e.message)),180);}).observe(source);
+let resizeTimer;let widths='';new ResizeObserver(()=>{const next=source.clientWidth+':'+target.clientWidth;if(next===widths)return;widths=next;clearTimeout(resizeTimer);if(doc)resizeTimer=setTimeout(()=>redraw().catch(e=>status('页面重绘失败：'+e.message)),180);}).observe(document.querySelector('.columns'));
+// Pane sizes can change while the outer container stays the same.
+new ResizeObserver(()=>{const next=source.clientWidth+':'+target.clientWidth;if(next===widths)return;widths=next;clearTimeout(resizeTimer);if(doc)resizeTimer=setTimeout(()=>redraw().catch(e=>status('页面重绘失败：'+e.message)),180);}).observe(source);
