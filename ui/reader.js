@@ -1,12 +1,15 @@
 import*as pdfjs from'./vendor/pdf.mjs';
 import{DEFAULTS,splitText,translate,hash,isPahlavi}from'./core.js';
 import*as db from'./db.js';
+import{initSelection}from'./selection.js';
 pdfjs.GlobalWorkerOptions.workerSrc='./vendor/pdf.worker.mjs';
 const $=id=>document.getElementById(id),params=new URLSearchParams(location.search),detached=params.get('view')==='translation';
 if(detached)document.body.classList.add('detached');
 let doc=null,pdf=null,page=0,channel=null,busy=false,importing=false,abort=null,profile='',settings={...DEFAULTS},renderVersion=0,scrollLock=false,translationWindow=null,translationDocId=null;
 const source=$('source'),target=$('target');
 const status=t=>$('status').textContent=t;
+const selection=initSelection({source,target,configure:async()=>{await loadSettings();return{settings:{...settings},profile};}});
+let pdfRenderTask=null,pdfTextTask=null;
 async function loadSettings(){settings={...DEFAULTS,...(await chrome.storage.local.get('settings')).settings};profile=await hash(JSON.stringify([settings.endpoint,settings.model,settings.language,settings.domain,settings.glossary,settings.sourceLanguage,settings.pahlaviFormat,'philology-v1']));$('targetLabel').textContent=settings.language+' · '+(isPahlavi(settings)?'帕拉维语辅助释读（需校订）':settings.domain);$('languageNotice').hidden=!isPahlavi(settings);target.dir=settings.language==='波斯语（Persian）'?'rtl':'auto';}
 const cacheKey=(p,i)=>`tr:${doc.id}:${profile}:${p}:${i}`;
 function controls(){const locked=busy||importing;$('all').disabled=locked||!doc;$('current').disabled=locked||!doc;$('stop').disabled=!busy;$('prev').disabled=importing||!doc||page===0;$('next').disabled=importing||!doc||page>=doc.pages.length-1;$('file').disabled=locked;$('paste').disabled=locked;$('library').disabled=locked;}
@@ -62,12 +65,19 @@ $('file').onchange=async e=>{
  }catch(e){status('导入失败：'+e.message);}finally{importing=false;$('file').value='';controls();}
 };
 async function render(){
- const v=++renderVersion;source.replaceChildren();target.replaceChildren();if(!doc)return;
+ selection.reset();pdfRenderTask?.cancel();pdfTextTask?.cancel();const v=++renderVersion;source.replaceChildren();target.replaceChildren();if(!doc)return;
  $('pageLabel').textContent=`${page+1} / ${doc.pages.length}`;controls();
  if(pdf&&!detached){
   const pg=await pdf.getPage(page+1);if(v!==renderVersion)return;
-  const viewport=pg.getViewport({scale:1.5});const canvas=document.createElement('canvas');canvas.className='pagecanvas';canvas.width=viewport.width;canvas.height=viewport.height;source.append(canvas);
-  await pg.render({canvasContext:canvas.getContext('2d'),viewport}).promise;if(v!==renderVersion)return;
+  const base=pg.getViewport({scale:1}),css=getComputedStyle(source),width=source.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight);
+  const viewport=pg.getViewport({scale:Math.max(0.2,width/base.width)}),dpr=window.devicePixelRatio||1;
+  const shell=document.createElement('div');shell.className='pdf-page-shell';shell.style.width=viewport.width+'px';shell.style.height=viewport.height+'px';shell.style.setProperty('--total-scale-factor',viewport.scale);source.append(shell);
+  const canvas=document.createElement('canvas');canvas.className='pagecanvas';canvas.width=Math.ceil(viewport.width*dpr);canvas.height=Math.ceil(viewport.height*dpr);shell.append(canvas);
+  const layer=document.createElement('div');layer.className='textLayer';shell.append(layer);
+  pdfRenderTask=pg.render({canvasContext:canvas.getContext('2d'),viewport,transform:dpr===1?null:[dpr,0,0,dpr,0,0]});
+  pdfTextTask=new pdfjs.TextLayer({textContentSource:pg.streamTextContent(),container:layer,viewport});
+  try{await Promise.all([pdfRenderTask.promise,pdfTextTask.render()]);}catch(e){if(e.name==='RenderingCancelledException'||e.name==='AbortException')return;throw e;}if(v!==renderVersion)return;
+
  }else if(!detached){doc.pages[page].chunks.forEach((text,i)=>{const p=document.createElement('p');p.className='block';p.dir='auto';p.dataset.index=i;p.textContent=text;source.append(p);});}
  await renderTranslations();source.scrollTop=0;target.scrollTop=0;
 }
@@ -128,10 +138,12 @@ $('export').onclick=async()=>{
 $('library').onclick=async()=>{const list=$('historyList');list.replaceChildren();for(const item of await db.get('history')||[]){const b=document.createElement('button');b.textContent=item.title+' · '+new Date(item.date).toLocaleDateString();b.onclick=async()=>{try{await openDoc(item.id);$('historyDialog').close();}catch(e){status(e.message);}};list.append(b);}if(!list.children.length)list.textContent='暂无记录';$('historyDialog').showModal();};
 $('historyClose').onclick=()=>$('historyDialog').close();
 $('clearHistory').onclick=async()=>{if(!confirm('确定删除全部本地文献和译文？此操作无法撤销。'))return;await db.clear();channel?.postMessage({type:'cleared'});location.href=chrome.runtime.getURL('reader.html');};
-chrome.storage.onChanged.addListener(async changes=>{if(changes.settings){cancel();await loadSettings();if(doc)await renderTranslations();status('设置已更新。按新语言、模型及术语表读取缓存。');}});
+chrome.storage.onChanged.addListener(async changes=>{if(changes.settings){selection.reset();cancel();await loadSettings();if(doc)await renderTranslations();status('设置已更新。按新语言、模型及术语表读取缓存。');}});
 window.addEventListener('beforeunload',()=>channel?.close());
 try{
  await loadSettings();controls();
  if(params.has('capture')){const key='capture:'+params.get('capture'),item=(await chrome.storage.local.get(key))[key];if(item){await importText(item.title,item.text,'网页');await chrome.storage.local.remove(key);}else status('网页正文已失效，请重新提取');}
  else if(params.has('doc'))await openDoc(params.get('doc'));
 }catch(e){status(e.message);}
+
+let resizeTimer;let oldWidth=source.clientWidth;new ResizeObserver(()=>{const width=source.clientWidth;if(Math.abs(width-oldWidth)<2)return;oldWidth=width;clearTimeout(resizeTimer);if(pdf&&!detached)resizeTimer=setTimeout(()=>render().catch(e=>status('页面重绘失败：'+e.message)),180);}).observe(source);
